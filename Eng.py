@@ -68,12 +68,14 @@ def save_result(mode, correct, total):
 def get_results():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute("SELECT mode, correct, total, percent, played_at FROM results ORDER BY id DESC LIMIT 30")
+    cur.execute(
+        "SELECT mode, correct, total, percent, played_at FROM results ORDER BY id DESC LIMIT 30"
+    )
     data = cur.fetchall()
     conn.close()
     return data
 
-# --- CSV 取り込み ---
+# --- CSV取り込み ---
 def import_words_from_csv(file):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -97,9 +99,9 @@ def import_words_from_csv(file):
     conn.close()
     return count
 
-# --- Streamlit アプリ ---
-st.set_page_config(page_title="英単語クイズアプリ", page_icon="🧠", layout="centered")
-st.title("🧠 英単語クイズアプリ（Streamlit版）")
+# --- Streamlit ---
+st.set_page_config(page_title="英単語クイズアプリ", page_icon="🧠")
+st.title("🧠 英単語クイズアプリ")
 
 create_tables()
 
@@ -114,64 +116,6 @@ menu = st.sidebar.radio("メニュー", [
     "ヘルプ"
 ])
 
-# --- 単語追加 ---
-if menu == "単語を追加":
-    st.header("単語を追加（複数対応）")
-    words_text = st.text_input("英単語（カンマ区切り可）")
-    meanings_text = st.text_input("意味（カンマ区切り可）")
-
-    if st.button("追加"):
-        if not words_text or not meanings_text:
-            st.warning("⚠️ 英単語と意味を入力してください。")
-        else:
-            words = [w.strip() for w in words_text.split(",") if w.strip()]
-            meanings = [m.strip() for m in meanings_text.split(",") if m.strip()]
-
-            if len(words) != len(meanings):
-                st.error("❌ 単語と意味の数が一致していません。")
-            else:
-                for w, m in zip(words, meanings):
-                    add_word(w, m)
-                st.success(f"✅ {len(words)}件の単語を追加しました！")
-
-# --- CSV取り込み ---
-elif menu == "CSV取り込み":
-    st.header("CSVから単語を取り込む")
-
-    st.markdown("""
-📄 **CSVフォーマット（UTF-8）**
-""")
-
-    file = st.file_uploader("CSVファイルを選択", type=["csv"])
-
-    if file is not None:
-        if st.button("取り込み開始"):
-            try:
-                count = import_words_from_csv(file)
-                st.success(f"✅ {count} 件の単語を取り込みました！")
-            except Exception as e:
-                st.error(f"❌ エラーが発生しました: {e}")
-
-# --- 単語一覧・削除 ---
-elif menu == "単語一覧・削除":
-    st.header("登録単語一覧")
-
-    words = get_all_words()
-    if not words:
-        st.info("登録された単語がありません。")
-    else:
-        for w in words:
-            col1, col2, col3 = st.columns([3, 4, 1])
-            with col1:
-                st.text(w[1])
-            with col2:
-                st.text(w[2])
-            with col3:
-                if st.button("🗑️ 削除", key=f"del_{w[0]}"):
-                    delete_word(w[0])
-                    st.success(f"「{w[1]}」を削除しました。")
-                    st.experimental_rerun()
-
 # --- クイズ共通処理 ---
 def run_quiz(questions, mode_name):
     st.header(mode_name)
@@ -180,84 +124,121 @@ def run_quiz(questions, mode_name):
         st.session_state.quiz_mode = mode_name
         st.session_state.quiz_index = 0
         st.session_state.correct = 0
-        random.shuffle(questions)
-        st.session_state._questions = questions
+        st.session_state.feedback = None
 
-    questions = st.session_state._questions
+        random.shuffle(questions)
+        st.session_state.questions = [
+            {
+                "data": q,
+                "mode": random.choice(["EN_TO_JA", "JA_TO_EN"])
+            }
+            for q in questions
+        ]
+
     idx = st.session_state.quiz_index
+    questions = st.session_state.questions
 
     if idx >= len(questions):
         total = len(questions)
-        percent = round(st.session_state.correct / total * 100, 1) if total > 0 else 0.0
+        percent = round(st.session_state.correct / total * 100, 1)
         st.success(f"🎉 終了！ {st.session_state.correct}/{total}（{percent}%）")
         save_result(mode_name, st.session_state.correct, total)
 
         if st.button("リセット"):
-            for k in ["quiz_mode", "quiz_index", "correct", "_questions"]:
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.experimental_rerun()
+            for k in ["quiz_mode", "quiz_index", "correct", "questions", "feedback"]:
+                st.session_state.pop(k, None)
+            st.rerun()
         st.stop()
 
-    q = questions[idx]
-    mode = random.choice(["EN_TO_JA", "JA_TO_EN"])
+    item = questions[idx]
+    word, meaning = item["data"][1], item["data"][2]
 
-    if mode == "EN_TO_JA":
-        question_text = f"「{q[1]}」の意味は？"
-        answer = q[2]
+    if item["mode"] == "EN_TO_JA":
+        question = f"「{word}」の意味は？"
+        answer = meaning
     else:
-        question_text = f"「{q[2]}」の英単語は？"
-        answer = q[1]
+        question = f"「{meaning}」の英単語は？"
+        answer = word
 
-    st.subheader(f"第 {idx + 1} 問 / 全 {len(questions)}問")
-    st.write(question_text)
-    ans = st.text_input("回答を入力", key=f"ans_{idx}")
+    st.subheader(f"第 {idx+1} 問 / 全 {len(questions)} 問")
+    st.write(question)
 
-    if st.button("回答", key=f"btn_{idx}"):
-        if ans.strip().lower() == str(answer).strip().lower():
+    user_ans = st.text_input("回答", key=f"ans_{idx}")
+
+    # --- 回答ボタン ---
+    if st.button("回答"):
+        if user_ans.strip().lower() == answer.lower():
+            st.session_state.feedback = ("correct", "✅ 正解！")
             st.session_state.correct += 1
-            st.success("✅ 正解！")
         else:
-            st.error(f"❌ 不正解。正解は「{answer}」でした。")
+            st.session_state.feedback = (
+                "wrong",
+                f"❌ 不正解。正解は「{answer}」"
+            )
 
-        st.session_state.quiz_index += 1
-        st.experimental_rerun()
+    # --- 結果表示 ---
+    if st.session_state.feedback:
+        kind, msg = st.session_state.feedback
+        if kind == "correct":
+            st.success(msg)
+        else:
+            st.error(msg)
 
-# --- クイズ各モード ---
-if menu == "1問クイズ":
+        if st.button("次へ"):
+            st.session_state.quiz_index += 1
+            st.session_state.feedback = None
+            st.rerun()
+
+# --- メニュー処理 ---
+if menu == "単語を追加":
+    st.header("単語を追加")
+    w = st.text_input("英単語")
+    m = st.text_input("意味")
+    if st.button("追加"):
+        if w and m:
+            add_word(w, m)
+            st.success("追加しました")
+
+elif menu == "CSV取り込み":
+    st.header("CSV取り込み")
+    file = st.file_uploader("CSV選択", type="csv")
+    if file and st.button("取り込み"):
+        count = import_words_from_csv(file)
+        st.success(f"{count} 件追加")
+
+elif menu == "単語一覧・削除":
+    for w in get_all_words():
+        col1, col2, col3 = st.columns([3,4,1])
+        col1.write(w[1])
+        col2.write(w[2])
+        if col3.button("削除", key=w[0]):
+            delete_word(w[0])
+            st.rerun()
+
+elif menu == "1問クイズ":
     words = get_all_words()
-    if not words:
-        st.warning("単語が登録されていません。")
+    if words:
+        run_quiz(words[:1], "1問クイズ")
     else:
-        run_quiz(random.sample(words, 1), "1問クイズ")
+        st.info("単語がありません")
 
 elif menu == "5問クイズ":
     words = get_all_words()
-    if len(words) < 5:
-        st.warning("5問以上の単語を登録してください。")
+    if len(words) >= 5:
+        run_quiz(words[:5], "5問クイズ")
     else:
-        run_quiz(random.sample(words, 5), "5問クイズ")
+        st.info("5語以上必要です")
 
 elif menu == "全単語クイズ":
     words = get_all_words()
-    if not words:
-        st.warning("単語が登録されていません。")
-    else:
+    if words:
         run_quiz(words, "全単語クイズ")
-
-# --- 実績表示 ---
-elif menu == "実績を見る":
-    st.header("クイズ実績")
-    results = get_results()
-
-    if not results:
-        st.info("実績がまだありません。")
     else:
-        for r in results:
-            st.write(f"[{r[4]}] {r[0]}: {r[1]}/{r[2]} ({r[3]}%)")
+        st.info("単語がありません")
 
-        avg = sum(r[3] for r in results) / len(results)
-        st.markdown(f"**平均正答率:** {avg:.1f}%")
+elif menu == "実績を見る":
+    for r in get_results():
+        st.write(f"{r[4]} | {r[0]} | {r[1]}/{r[2]} ({r[3]}%)")
 
 # --- ヘルプ ---
 elif menu == "ヘルプ":
@@ -305,3 +286,5 @@ UTF-8で保存 → 取り込み開始
 - 5問ができない → 単語5件以上必要
 
 """)
+
+#popcorn

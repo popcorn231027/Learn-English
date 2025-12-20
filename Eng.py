@@ -1,122 +1,69 @@
 import streamlit as st
-import sqlite3
 import random
-from datetime import datetime
 import os
 import csv
 import io
 
-# --- データベース設定 ---
-DB_NAME = os.path.join(os.path.dirname(__file__), "words.db")
+# =====================
+# CSV 設定
+# =====================
+BASE_DIR = os.path.dirname(__file__)
+WORDS_CSV = os.path.join(BASE_DIR, "words.csv")
 
-def create_tables():
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS words (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            word TEXT NOT NULL,
-            meaning TEXT NOT NULL
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mode TEXT,
-            correct INTEGER,
-            total INTEGER,
-            percent REAL,
-            played_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+def init_csv():
+    if not os.path.exists(WORDS_CSV):
+        with open(WORDS_CSV, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["word", "meaning"])
 
+# =====================
+# CSV 操作
+# =====================
 def add_word(word, meaning):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO words (word, meaning) VALUES (?, ?)", (word, meaning))
-    conn.commit()
-    conn.close()
+    with open(WORDS_CSV, "a", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([word, meaning])
 
 def get_all_words():
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("SELECT id, word, meaning FROM words")
-    data = cur.fetchall()
-    conn.close()
-    return data
+    words = []
+    with open(WORDS_CSV, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for i, row in enumerate(reader):
+            words.append((i, row["word"], row["meaning"]))
+    return words
 
-def delete_word(word_id):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM words WHERE id = ?", (word_id,))
-    conn.commit()
-    conn.close()
+def delete_word(index):
+    with open(WORDS_CSV, "r", encoding="utf-8-sig") as f:
+        rows = list(csv.reader(f))
 
-def save_result(mode, correct, total):
-    percent = round(correct / total * 100, 1) if total > 0 else 0.0
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO results (mode, correct, total, percent, played_at) VALUES (?, ?, ?, ?, ?)",
-        (mode, correct, total, percent, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-    )
-    conn.commit()
-    conn.close()
+    header = rows[0]
+    data = rows[1:]
+    data.pop(index)
 
-def get_results():
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT mode, correct, total, percent, played_at FROM results ORDER BY id DESC LIMIT 30"
-    )
-    data = cur.fetchall()
-    conn.close()
-    return data
+    with open(WORDS_CSV, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(data)
 
-# --- CSV取り込み ---
 def import_words_from_csv(file):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-
     text = file.getvalue().decode("utf-8-sig")
     reader = csv.reader(io.StringIO(text))
 
     count = 0
-    for row in reader:
-        if len(row) >= 2:
-            word = row[0].strip()
-            meaning = row[1].strip()
-            if word and meaning:
-                cur.execute(
-                    "INSERT INTO words (word, meaning) VALUES (?, ?)",
-                    (word, meaning)
-                )
-                count += 1
-
-    conn.commit()
-    conn.close()
+    with open(WORDS_CSV, "a", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        for row in reader:
+            if len(row) >= 2:
+                word = row[0].strip()
+                meaning = row[1].strip()
+                if word and meaning:
+                    writer.writerow([word, meaning])
+                    count += 1
     return count
 
-# --- Streamlit ---
-st.set_page_config(page_title="英単語クイズアプリ", page_icon="🧠")
-st.title("🧠 英単語クイズアプリ")
-
-create_tables()
-
-menu = st.sidebar.radio("メニュー", [
-    "単語を追加",
-    "CSV取り込み",
-    "単語一覧・削除",
-    "1問クイズ",
-    "5問クイズ",
-    "全単語クイズ",
-    "実績を見る",
-    "ヘルプ"
-])
-
-# --- クイズ共通処理 ---
+# =====================
+# クイズ共通処理
+# =====================
 def run_quiz(questions, mode_name):
     st.header(mode_name)
 
@@ -136,21 +83,20 @@ def run_quiz(questions, mode_name):
         ]
 
     idx = st.session_state.quiz_index
-    questions = st.session_state.questions
+    qs = st.session_state.questions
 
-    if idx >= len(questions):
-        total = len(questions)
+    if idx >= len(qs):
+        total = len(qs)
         percent = round(st.session_state.correct / total * 100, 1)
         st.success(f"🎉 終了！ {st.session_state.correct}/{total}（{percent}%）")
-        save_result(mode_name, st.session_state.correct, total)
 
-        if st.button("リセット"):
-            for k in ["quiz_mode", "quiz_index", "correct", "questions", "feedback"]:
-                st.session_state.pop(k, None)
+        if st.button("最初から"):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
             st.rerun()
         st.stop()
 
-    item = questions[idx]
+    item = qs[idx]
     word, meaning = item["data"][1], item["data"][2]
 
     if item["mode"] == "EN_TO_JA":
@@ -160,23 +106,18 @@ def run_quiz(questions, mode_name):
         question = f"「{meaning}」の英単語は？"
         answer = word
 
-    st.subheader(f"第 {idx+1} 問 / 全 {len(questions)} 問")
+    st.subheader(f"第 {idx+1} 問 / 全 {len(qs)} 問")
     st.write(question)
 
     user_ans = st.text_input("回答", key=f"ans_{idx}")
 
-    # --- 回答ボタン ---
     if st.button("回答"):
         if user_ans.strip().lower() == answer.lower():
             st.session_state.feedback = ("correct", "✅ 正解！")
             st.session_state.correct += 1
         else:
-            st.session_state.feedback = (
-                "wrong",
-                f"❌ 不正解。正解は「{answer}」"
-            )
+            st.session_state.feedback = ("wrong", f"❌ 不正解。正解は「{answer}」")
 
-    # --- 結果表示 ---
     if st.session_state.feedback:
         kind, msg = st.session_state.feedback
         if kind == "correct":
@@ -189,7 +130,27 @@ def run_quiz(questions, mode_name):
             st.session_state.feedback = None
             st.rerun()
 
-# --- メニュー処理 ---
+# =====================
+# Streamlit UI
+# =====================
+st.set_page_config(page_title="英単語クイズ", page_icon="🧠")
+st.title("🧠 英単語クイズアプリ")
+
+init_csv()
+
+menu = st.sidebar.radio("メニュー", [
+    "単語を追加",
+    "CSV取り込み",
+    "単語一覧・削除",
+    "1問クイズ",
+    "5問クイズ",
+    "全単語クイズ",
+    "ヘルプ"
+])
+
+# =====================
+# メニュー処理
+# =====================
 if menu == "単語を追加":
     st.header("単語を追加")
     w = st.text_input("英単語")
@@ -204,11 +165,12 @@ elif menu == "CSV取り込み":
     file = st.file_uploader("CSV選択", type="csv")
     if file and st.button("取り込み"):
         count = import_words_from_csv(file)
-        st.success(f"{count} 件追加")
+        st.success(f"{count} 件追加しました")
 
 elif menu == "単語一覧・削除":
+    st.header("単語一覧")
     for w in get_all_words():
-        col1, col2, col3 = st.columns([3,4,1])
+        col1, col2, col3 = st.columns([3, 4, 1])
         col1.write(w[1])
         col2.write(w[2])
         if col3.button("削除", key=w[0]):
@@ -236,14 +198,8 @@ elif menu == "全単語クイズ":
     else:
         st.info("単語がありません")
 
-elif menu == "実績を見る":
-    for r in get_results():
-        st.write(f"{r[4]} | {r[0]} | {r[1]}/{r[2]} ({r[3]}%)")
-
-# --- ヘルプ ---
 elif menu == "ヘルプ":
-    st.header("❓ ヘルプ・使い方")
-
+    st.header("❓ ヘルプ")
     st.markdown("""
 ## 🧠 このアプリでできること
 - 英単語と意味の登録
